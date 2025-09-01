@@ -1,6 +1,5 @@
 # Prisma
 prisma/migrations/
-prisma/schema.prisma
 
 # Dependencies
 node_modules/
