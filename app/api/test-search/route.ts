@@ -3,12 +3,36 @@ export const runtime = "nodejs";
 import { NextRequest } from "next/server";
 import { vectorStore } from "@/lib/vectorstore";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { Document } from "@langchain/core/documents";
+
+interface TestResult {
+  success: boolean;
+  count?: number;
+  docs?: Array<{
+    id: string;
+    metadata: Record<string, unknown>;
+    content: string;
+  }>;
+  error?: string;
+}
+
+interface SearchResults {
+  question: string;
+  k: number;
+  filter?: Record<string, unknown>;
+  tests: {
+    withFilter?: TestResult;
+    noFilter?: TestResult;
+    emptyFilter?: TestResult;
+  };
+  totalDocuments?: { count?: number; error?: string };
+}
 
 export async function POST(req: NextRequest) {
   try {
     const { question, k = 4, filter } = await req.json();
     
-    const results = {
+    const results: SearchResults = {
       question,
       k,
       filter,
@@ -22,16 +46,17 @@ export async function POST(req: NextRequest) {
         results.tests.withFilter = {
           success: true,
           count: docsWithFilter.length,
-          docs: docsWithFilter.map((d: any) => ({
-            id: d.id,
-            metadata: d.metadata,
+          docs: docsWithFilter.map((d: Document) => ({
+            id: d.metadata?.id as string || Math.random().toString(),
+            metadata: d.metadata || {},
             content: d.pageContent.substring(0, 100)
           }))
         };
       } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
         results.tests.withFilter = {
           success: false,
-          error: error.message
+          error: errorMessage
         };
       }
     }
@@ -42,16 +67,17 @@ export async function POST(req: NextRequest) {
       results.tests.noFilter = {
         success: true,
         count: docsNoFilter.length,
-        docs: docsNoFilter.map((d: any) => ({
-          id: d.id,
-          metadata: d.metadata,
+        docs: docsNoFilter.map((d: Document) => ({
+          id: d.metadata?.id as string || Math.random().toString(),
+          metadata: d.metadata || {},
           content: d.pageContent.substring(0, 100)
         }))
       };
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       results.tests.noFilter = {
         success: false,
-        error: error.message
+        error: errorMessage
       };
     }
 
@@ -61,16 +87,17 @@ export async function POST(req: NextRequest) {
       results.tests.emptyFilter = {
         success: true,
         count: docsEmptyFilter.length,
-        docs: docsEmptyFilter.map((d: any) => ({
-          id: d.id,
-          metadata: d.metadata,
+        docs: docsEmptyFilter.map((d: Document) => ({
+          id: d.metadata?.id as string || Math.random().toString(),
+          metadata: d.metadata || {},
           content: d.pageContent.substring(0, 100)
         }))
       };
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       results.tests.emptyFilter = {
         success: false,
-        error: error.message
+        error: errorMessage
       };
     }
 
@@ -83,18 +110,20 @@ export async function POST(req: NextRequest) {
       if (countError) {
         results.totalDocuments = { error: countError.message };
       } else {
-        results.totalDocuments = { count };
+        results.totalDocuments = { count: count || undefined };
       }
     } catch (error) {
-      results.totalDocuments = { error: error.message };
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      results.totalDocuments = { error: errorMessage };
     }
 
     return new Response(
       JSON.stringify(results, null, 2),
       { headers: { "content-type": "application/json" }, status: 200 }
     );
-  } catch (e: any) {
-    return new Response(JSON.stringify({ ok: false, error: e.message }), {
+  } catch (e: unknown) {
+    const errorMessage = e instanceof Error ? e.message : 'Unknown error occurred';
+    return new Response(JSON.stringify({ ok: false, error: errorMessage }), {
       headers: { "content-type": "application/json" },
       status: 400,
     });

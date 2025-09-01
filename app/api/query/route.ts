@@ -8,31 +8,40 @@ import { ChatPromptTemplate } from "@langchain/core/prompts";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { vectorStore } from "@/lib/vectorstore";
 import { prisma } from "@/lib/prisma";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 const Body = z.object({
   question: z.string().min(1),
   k: z.number().int().min(1).max(20).default(4),
-  filter: z.record(z.any(), z.any()).optional(), // akan diteruskan ke match_documents(filter JSONB)
+  filter: z.record(z.string(), z.unknown()).optional(),
   model: z.string().default("gpt-4o-mini"),
   temperature: z.number().min(0).max(2).default(0),
 });
 
 const prompt = ChatPromptTemplate.fromTemplate(`
-Jawab pertanyaan hanya berdasarkan KONTEN berikut.
-Jika jawabannya tidak ada, jawab: "Aku tidak menemukan jawabannya di dokumen."
+Answer the question based ONLY on the following CONTENT.
+If the answer is not found, respond: "I cannot find the answer in the documents."
 
-Berikan jawaban dalam format berikut:
-JAWABAN: [jawaban utama]
-CONFIDENCE: [tingkat kepercayaan 1-10, dimana 10 = sangat yakin]
-REASONING: [penjelasan singkat mengapa jawaban ini dipilih berdasarkan dokumen yang tersedia]
+Provide the answer in the following format:
+ANSWER: [main answer]
+CONFIDENCE: [confidence level 1-10, where 10 = very confident]
+REASONING: [brief explanation of why this answer was chosen based on the available documents]
 
-KONTEN:
+CONTENT:
 {context}
 
-PERTANYAAN: {question}
+QUESTION: {question}
 `);
 
-function formatDocs(docs: Array<{ pageContent: string; metadata: any; id?: string; similarityScore?: number }>) {
+interface DocumentWithScore {
+  pageContent: string;
+  metadata: Record<string, unknown>;
+  id?: string;
+  similarityScore?: number;
+  source?: string;
+}
+
+function formatDocs(docs: DocumentWithScore[]) {
   return docs
     .map(
       (d, i) =>
@@ -42,7 +51,7 @@ function formatDocs(docs: Array<{ pageContent: string; metadata: any; id?: strin
     .join("\n\n");
 }
 
-function calculateConfidenceMetrics(docs: Array<{ similarityScore?: number }>, question: string) {
+function calculateConfidenceMetrics(docs: DocumentWithScore[]) {
   if (!docs || docs.length === 0) {
     return {
       avgSimilarity: 0,
@@ -102,9 +111,9 @@ function parseStructuredResponse(response: string) {
   let currentSection = '';
   
   for (const line of lines) {
-    if (line.startsWith('JAWABAN:')) {
+    if (line.startsWith('ANSWER:')) {
       currentSection = 'answer';
-      answer = line.replace('JAWABAN:', '').trim();
+      answer = line.replace('ANSWER:', '').trim();
     } else if (line.startsWith('CONFIDENCE:')) {
       currentSection = 'confidence';
       const confStr = line.replace('CONFIDENCE:', '').trim();
@@ -126,42 +135,71 @@ function parseStructuredResponse(response: string) {
   if (!answer && !confidence && !reasoning) {
     answer = response.trim();
     confidence = 5; // Default confidence
-    reasoning = 'Jawaban berdasarkan analisis dokumen yang tersedia';
+    reasoning = 'Answer based on analysis of available documents';
   }
   
   return { answer, confidence, reasoning };
+}
+
+// Function to get all available sources dynamically
+async function getAllAvailableSources(): Promise<string[]> {
+  try {
+    // Get unique sources from documents table
+    const { data: sourcesData, error } = await supabaseAdmin
+      .from('documents')
+      .select('metadata->>source')
+      .not('metadata->>source', 'is', null);
+    
+    if (error) {
+      console.log('Error fetching sources:', error.message);
+      return ["docs-langchain", "docs-fitur-a", "docs-rag"]; // Fallback to known sources
+    }
+    
+    // Extract unique sources and filter out null/undefined values
+    const uniqueSources = [...new Set(
+      sourcesData
+        .map((row: Record<string, unknown>) => row['metadata->>source'] as string)
+        .filter((source: string) => source && source.trim() !== '')
+    )];
+    
+    console.log(`Found ${uniqueSources.length} available sources:`, uniqueSources);
+    return uniqueSources.length > 0 ? uniqueSources : ["docs-langchain", "docs-fitur-a", "docs-rag"];
+  } catch (error) {
+    console.log('Error in getAllAvailableSources:', error);
+    return ["docs-langchain", "docs-fitur-a", "docs-rag"]; // Fallback to known sources
+  }
 }
 
 export async function POST(req: NextRequest) {
   try {
     const { question, k, filter, model, temperature } = Body.parse(await req.json());
 
-    // 1) Retrieve top-k dokumen dari Supabase Vector Store
-    let docs;
+    // 1) Retrieve top-k documents from Supabase Vector Store
+    let docs: DocumentWithScore[] = [];
     
     if (filter && Object.keys(filter).length > 0) {
-      // Gunakan filter yang dikirim user
+      // Use user-provided filter
       console.log(`Using user filter:`, filter);
-      const docsWithScores = await vectorStore.similaritySearchWithScore(question, k, filter as any);
+      const docsWithScores = await vectorStore.similaritySearchWithScore(question, k, filter as Record<string, unknown>);
       docs = docsWithScores.map(([doc, score]) => ({
         ...doc,
         similarityScore: score
       }));
       console.log(`User filter search successful, found ${docs?.length || 0} docs with scores`);
     } else {
-      // Search di seluruh dokumen tanpa filter user
-      // Karena Supabase VectorStore tidak bekerja dengan baik tanpa filter,
-      // kita akan search dengan mencoba berbagai source yang ada
+      // Search all documents without user filter
+      // Since Supabase VectorStore doesn't work well without filter,
+      // we'll search by trying various available sources
       console.log('No user filter provided, searching all documents');
       
-      // Strategy: Search per source dan gabungkan hasilnya secara proporsional
-      const sources = ["docs-langchain", "docs-fitur-a"];
-      let allDocs: any[] = [];
+      // Strategy: Get all available sources dynamically and search per source
+      const sources = await getAllAvailableSources();
+      const allDocs: DocumentWithScore[] = [];
       const docsPerSource = Math.max(1, Math.floor(k / sources.length));
       
       for (const source of sources) {
         try {
-          const sourceDocs = await vectorStore.similaritySearchWithScore(question, docsPerSource, { source } as any);
+          const sourceDocs = await vectorStore.similaritySearchWithScore(question, docsPerSource, { source } as Record<string, unknown>);
           // Convert format to include similarity scores
           const docsWithScores = sourceDocs.map(([doc, score]) => ({
             ...doc,
@@ -171,26 +209,26 @@ export async function POST(req: NextRequest) {
           allDocs.push(...docsWithScores);
           console.log(`Found ${sourceDocs.length} docs from source: ${source} with scores`);
         } catch (sourceError) {
-          console.log(`Failed to search source ${source}:`, (sourceError as any).message);
+          console.log(`Failed to search source ${source}:`, (sourceError as Error).message);
         }
       }
       
-      // Jika tidak ada hasil dari source yang dikenal, coba dengan metadata exists
+      // If no results from known sources, try with metadata exists
       if (allDocs.length === 0) {
         try {
           console.log('No results from known sources, trying metadata filter');
-          const metadataDocsWithScores = await vectorStore.similaritySearchWithScore(question, k, { metadata: { $exists: true } } as any);
+          const metadataDocsWithScores = await vectorStore.similaritySearchWithScore(question, k, { metadata: { $exists: true } } as Record<string, unknown>);
           docs = metadataDocsWithScores.map(([doc, score]) => ({
             ...doc,
             similarityScore: score
           }));
           console.log(`Metadata filter search successful, found ${docs?.length || 0} docs`);
         } catch (metadataError) {
-          console.log('Metadata filter also failed:', (metadataError as any).message);
+          console.log('Metadata filter also failed:', (metadataError as Error).message);
           docs = [];
         }
       } else {
-        // Sort berdasarkan similarity score (higher is better) dan ambil top-k
+        // Sort by similarity score (higher is better) and take top-k
         allDocs.sort((a, b) => (b.similarityScore || 0) - (a.similarityScore || 0));
         docs = allDocs.slice(0, k);
         console.log(`Combined search successful, found ${docs?.length || 0} docs total from ${sources.length} sources`);
@@ -201,10 +239,10 @@ export async function POST(req: NextRequest) {
     console.log(`Total documents found: ${docs?.length || 0}`);
 
     // Calculate confidence metrics
-    const confidenceMetrics = calculateConfidenceMetrics(docs, question);
+    const confidenceMetrics = calculateConfidenceMetrics(docs);
     console.log(`Confidence metrics:`, confidenceMetrics);
 
-    // 2) RAG chain sederhana: [format context] -> [prompt] -> [LLM]
+    // 2) RAG chain: [format context] -> [prompt] -> [LLM]
     const llm = new ChatOpenAI({ model, temperature, apiKey: process.env.API_KEY });
     const chain = prompt.pipe(llm).pipe(new StringOutputParser());
 
@@ -216,7 +254,7 @@ export async function POST(req: NextRequest) {
     // Parse structured response
     const { answer, confidence: llmConfidence, reasoning } = parseStructuredResponse(rawAnswer);
 
-    // 3) Simpan log Q/A pakai Prisma (ORM)
+    // 3) Save Q/A log using Prisma (ORM)
     await prisma.queryLog.create({
       data: {
         question,
@@ -234,16 +272,16 @@ export async function POST(req: NextRequest) {
           avgSimilarity: Math.round(confidenceMetrics.avgSimilarity * 1000) / 1000,
           maxSimilarity: Math.round(confidenceMetrics.maxSimilarity * 1000) / 1000,
           scoreVariance: Math.round(confidenceMetrics.scoreVariance * 1000) / 1000,
-          explanation: `Confidence berdasarkan: rata-rata similarity ${(confidenceMetrics.avgSimilarity * 100).toFixed(1)}%, konsistensi score, dan jumlah dokumen relevan (${confidenceMetrics.documentCount})`
+          explanation: `Confidence based on: average similarity ${(confidenceMetrics.avgSimilarity * 100).toFixed(1)}%, consistency score, and relevant document count (${confidenceMetrics.documentCount})`
         },
         reasoning,
         docsFound: docs?.length || 0,
-        sources: docs.map((d: any) => ({
+        sources: docs.map((d) => ({
           id: d.id,
           metadata: d.metadata,
           snippet: d.pageContent.slice(0, 200),
           similarityScore: Math.round((d.similarityScore || 0) * 1000) / 1000,
-          relevanceLevel: d.similarityScore > 0.7 ? 'High' : d.similarityScore > 0.5 ? 'Medium' : 'Low'
+          relevanceLevel: (d.similarityScore || 0) > 0.7 ? 'High' : (d.similarityScore || 0) > 0.5 ? 'Medium' : 'Low'
         })),
         searchQuality: {
           totalDocuments: confidenceMetrics.documentCount,
@@ -254,13 +292,27 @@ export async function POST(req: NextRequest) {
                           'Low confidence answer - consider rephrasing question'
         }
       }),
-      { headers: { "content-type": "application/json" }, status: 200 }
+      {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      }
     );
-  } catch (e: any) {
-    console.error('Query error:', e);
-    return new Response(JSON.stringify({ ok: false, error: e.message }), {
-      headers: { "content-type": "application/json" },
-      status: 400,
-    });
+  } catch (error) {
+    console.error('Error in POST /api/query:', error);
+    return new Response(
+      JSON.stringify({
+        ok: false,
+        error: 'Internal server error',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      }),
+      {
+        status: 500,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      }
+    );
   }
 }

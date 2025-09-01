@@ -1,0 +1,27 @@
+# Test Document for RAG System
+
+This is a test document to verify that the document upload and processing functionality works correctly.
+
+## Features to Test
+
+1. **Text Processing**: The system should be able to process plain text documents
+2. **Chunking**: Text should be split into appropriate chunks for vector storage
+3. **Metadata**: Source and description should be properly stored
+4. **Search**: The content should be searchable after upload
+
+## Technical Details
+
+- Document Type: Plain Text (.txt)
+- Content: Test content for RAG system
+- Purpose: Verify upload functionality
+- Expected Result: Document should appear in sources list and be searchable
+
+## Next Steps
+
+After uploading this document, you should be able to:
+- See it in the Available Sources section
+- Search for content within it
+- Get AI-generated answers based on this content
+
+This test document helps ensure the RAG system is working properly.
+

@@ -16,6 +16,7 @@
     "@prisma/client": "^6.15.0",
     "@supabase/supabase-js": "^2.56.1",
     "langchain": "^0.3.31",
+    "lucide-react": "^0.542.0",
     "next": "15.5.2",
     "react": "19.1.0",
     "react-dom": "19.1.0",

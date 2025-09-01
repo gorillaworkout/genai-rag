@@ -17,14 +17,14 @@ export const vectorStore = new SupabaseVectorStore(embeddings, {
 export async function customSimilaritySearch(
   question: string, 
   k: number = 4, 
-  filter?: Record<string, any>
+  filter?: Record<string, unknown>
 ) {
   try {
     // Generate embedding untuk question
     const questionEmbedding = await embeddings.embedQuery(question);
     
     // Build query berdasarkan ada tidaknya filter
-    let query = supabaseAdmin.rpc('match_documents', {
+    const query = supabaseAdmin.rpc('match_documents', {
       query_embedding: questionEmbedding,
       match_count: k,
       ...(filter && Object.keys(filter).length > 0 ? { filter: filter } : {})
@@ -43,7 +43,7 @@ export async function customSimilaritySearch(
     }
     
     // Convert ke format yang diharapkan LangChain
-    return data.map((doc: any) => ({
+    return data.map((doc: { content: string; metadata?: Record<string, unknown>; id: string }) => ({
       pageContent: doc.content,
       metadata: doc.metadata || {},
       id: doc.id

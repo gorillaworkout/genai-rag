@@ -1,9 +1,8 @@
 export const runtime = "nodejs";
 
-import { NextRequest } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
-export async function GET(req: NextRequest) {
+export async function GET() {
   try {
     // Get all documents from the documents table
     const { data: documents, error } = await supabaseAdmin
@@ -37,8 +36,9 @@ export async function GET(req: NextRequest) {
       }),
       { headers: { "content-type": "application/json" }, status: 200 }
     );
-  } catch (e: any) {
-    return new Response(JSON.stringify({ ok: false, error: e.message }), {
+  } catch (e: unknown) {
+    const errorMessage = e instanceof Error ? e.message : 'Unknown error occurred';
+    return new Response(JSON.stringify({ ok: false, error: errorMessage }), {
       headers: { "content-type": "application/json" },
       status: 400,
     });
