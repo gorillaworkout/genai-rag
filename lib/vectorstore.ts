@@ -2,6 +2,13 @@ import { SupabaseVectorStore } from "@langchain/community/vectorstores/supabase"
 import { OpenAIEmbeddings } from "@langchain/openai";
 import { supabaseAdmin } from "./supabaseAdmin";
 
+// Debug environment variables
+console.log('🔍 Vectorstore initialization - Environment check:');
+console.log('API_KEY exists:', !!process.env.API_KEY);
+console.log('API_KEY length:', process.env.API_KEY?.length || 0);
+console.log('API_KEY prefix:', process.env.API_KEY?.substring(0, 10) || 'none');
+console.log('NODE_ENV:', process.env.NODE_ENV);
+
 export const embeddings = new OpenAIEmbeddings({
   model: "text-embedding-3-small", // 1536 dims
   apiKey: process.env.API_KEY,
